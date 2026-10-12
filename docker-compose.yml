@@ -1,0 +1,163 @@
+x-flagsmith-env: &flagsmith-env
+    DATABASE_URL: postgresql://${FLAGSMITH_DB_USER}:${FLAGSMITH_DB_PASSWORD}@postgres:5432/${FLAGSMITH_DB_NAME}
+    DJANGO_SECRET_KEY: ${FLAGSMITH_SECRET_KEY}
+    DJANGO_ALLOWED_HOSTS: '*'
+    FLAGSMITH_DOMAIN: ${FLAGSMITH_DOMAIN}
+    ENVIRONMENT: production
+    USE_POSTGRES_FOR_ANALYTICS: 'true'
+    TASK_RUN_METHOD: SYNCHRONOUS
+
+x-openfga-env: &openfga-env
+    OPENFGA_DATASTORE_ENGINE: postgres
+    OPENFGA_DATASTORE_URI: postgres://${OPENFGA_DB_USER}:${OPENFGA_DB_PASSWORD}@postgres:5432/${OPENFGA_DB_NAME}?sslmode=disable
+
+services:
+    postgres:
+        image: postgres:16-alpine
+        restart: unless-stopped
+        environment:
+            POSTGRES_USER: ${POSTGRES_SUPERUSER}
+            POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+            POSTGRES_DB: postgres
+            GLITCHTIP_DB_NAME: ${GLITCHTIP_DB_NAME}
+            GLITCHTIP_DB_USER: ${GLITCHTIP_DB_USER}
+            GLITCHTIP_DB_PASSWORD: ${GLITCHTIP_DB_PASSWORD}
+            FLAGSMITH_DB_NAME: ${FLAGSMITH_DB_NAME}
+            FLAGSMITH_DB_USER: ${FLAGSMITH_DB_USER}
+            FLAGSMITH_DB_PASSWORD: ${FLAGSMITH_DB_PASSWORD}
+            OPENFGA_DB_NAME: ${OPENFGA_DB_NAME}
+            OPENFGA_DB_USER: ${OPENFGA_DB_USER}
+            OPENFGA_DB_PASSWORD: ${OPENFGA_DB_PASSWORD}
+        volumes:
+            - postgres-data:/var/lib/postgresql/data
+            - ./postgres/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh:ro
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_SUPERUSER}']
+            start_period: 30s
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    valkey:
+        image: valkey/valkey:8-alpine
+        restart: unless-stopped
+        volumes:
+            - valkey-data:/data
+
+    glitchtip:
+        image: glitchtip/glitchtip:latest
+        restart: unless-stopped
+        environment:
+            DATABASE_URL: postgres://${GLITCHTIP_DB_USER}:${GLITCHTIP_DB_PASSWORD}@postgres:5432/${GLITCHTIP_DB_NAME}
+            VALKEY_URL: redis://valkey:6379
+            SECRET_KEY: ${GLITCHTIP_SECRET_KEY}
+            EMAIL_URL: ${GLITCHTIP_EMAIL_URL}
+            DEFAULT_FROM_EMAIL: ${GLITCHTIP_DEFAULT_FROM_EMAIL}
+            GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN}
+            GLITCHTIP_EMBED_WORKER: 'True'
+            ENABLE_USER_REGISTRATION: 'False'
+        depends_on:
+            postgres:
+                condition: service_healthy
+            valkey:
+                condition: service_started
+        volumes:
+            - glitchtip-uploads:/code/uploads
+
+    seaweedfs:
+        image: chrislusf/seaweedfs:latest
+        restart: unless-stopped
+        command:
+            - server
+            - -dir=/data
+            - -s3
+            - -s3.port=8333
+            - -ip.bind=0.0.0.0
+        volumes:
+            - seaweedfs-data:/data
+        healthcheck:
+            test: ['CMD', 'wget', '-qO-', 'http://seaweedfs:8333']
+            start_period: 15s
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+    flagsmith-migrate:
+        image: docker.flagsmith.com/flagsmith/flagsmith:latest
+        command: migrate
+        restart: 'no'
+        environment: *flagsmith-env
+        depends_on:
+            postgres:
+                condition: service_healthy
+
+    flagsmith:
+        image: docker.flagsmith.com/flagsmith/flagsmith:latest
+        command: serve
+        restart: unless-stopped
+        environment: *flagsmith-env
+        depends_on:
+            flagsmith-migrate:
+                condition: service_completed_successfully
+
+    uptime-kuma:
+        image: louislam/uptime-kuma:1
+        restart: unless-stopped
+        volumes:
+            - uptime-kuma-data:/app/data
+
+    goatcounter:
+        image: arp242/goatcounter
+        restart: unless-stopped
+        command: ['serve', '-listen', ':8080', '-tls', 'none']
+        volumes:
+            - goatcounter-data:/home/goatcounter/goatcounter-data
+
+    ntfy:
+        image: binwiederhier/ntfy
+        restart: unless-stopped
+        command: serve
+        volumes:
+            - ntfy-cache:/var/cache/ntfy
+            - ./ntfy/server.yml:/etc/ntfy/server.yml:ro
+
+    openfga-migrate:
+        image: openfga/openfga:latest
+        command: migrate
+        restart: 'no'
+        environment: *openfga-env
+        depends_on:
+            postgres:
+                condition: service_healthy
+
+    openfga:
+        image: openfga/openfga:latest
+        command: run
+        restart: unless-stopped
+        environment: *openfga-env
+        depends_on:
+            openfga-migrate:
+                condition: service_completed_successfully
+    nats:
+        image: nats:2.12-alpine
+        restart: unless-stopped
+        command: ['-js', '-sd', '/data', '-m', '8222']
+        volumes:
+            - nats-data:/data
+        healthcheck:
+            test: ['CMD', 'wget', '-qO-', 'http://localhost:8222/healthz']
+            start_period: 10s
+            interval: 10s
+            timeout: 5s
+            retries: 5
+
+volumes:
+    postgres-data:
+    valkey-data:
+    glitchtip-uploads:
+    seaweedfs-data:
+    uptime-kuma-data:
+    goatcounter-data:
+    ntfy-cache:
+    nats-data:
+    redis-data:
