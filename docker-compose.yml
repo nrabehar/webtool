@@ -5,11 +5,13 @@ x-flagsmith-env: &flagsmith-env
     FLAGSMITH_DOMAIN: ${FLAGSMITH_DOMAIN}
     ENVIRONMENT: production
     USE_POSTGRES_FOR_ANALYTICS: 'true'
-    TASK_RUN_METHOD: SYNCHRONOUS
+    TASK_RUN_METHOD: SYNCHRONOUSLY
 
 x-openfga-env: &openfga-env
     OPENFGA_DATASTORE_ENGINE: postgres
     OPENFGA_DATASTORE_URI: postgres://${OPENFGA_DB_USER}:${OPENFGA_DB_PASSWORD}@postgres:5432/${OPENFGA_DB_NAME}?sslmode=disable
+    OPENFGA_AUTHN_METHOD: preshared
+    OPENFGA_AUTHN_PRESHARED_KEYS: ${OPENFGA_PRESHARED_KEY}
 
 services:
     postgres:
