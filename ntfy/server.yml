@@ -3,3 +3,6 @@ base-url: "https://push.nrabehar.dedyn.io"
 behind-proxy: true
 
 cache-file: "/var/cache/ntfy/cache.db"
+auth-file: "/var/lib/ntfy/user.db"
+auth-default-access: "deny-all"
+enable-signup: false

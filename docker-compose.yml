@@ -1,7 +1,7 @@
 x-flagsmith-env: &flagsmith-env
     DATABASE_URL: postgresql://${FLAGSMITH_DB_USER}:${FLAGSMITH_DB_PASSWORD}@postgres:5432/${FLAGSMITH_DB_NAME}
     DJANGO_SECRET_KEY: ${FLAGSMITH_SECRET_KEY}
-    DJANGO_ALLOWED_HOSTS: '*'
+    DJANGO_ALLOWED_HOSTS: ${FLAGSMITH_ALLOWED_HOST}
     FLAGSMITH_DOMAIN: ${FLAGSMITH_DOMAIN}
     ENVIRONMENT: production
     USE_POSTGRES_FOR_ANALYTICS: 'true'
@@ -56,6 +56,7 @@ services:
             EMAIL_URL: ${GLITCHTIP_EMAIL_URL}
             DEFAULT_FROM_EMAIL: ${GLITCHTIP_DEFAULT_FROM_EMAIL}
             GLITCHTIP_DOMAIN: ${GLITCHTIP_DOMAIN}
+            ALLOWED_HOSTS: ${GLITCHTIP_ALLOWED_HOST}
             GLITCHTIP_EMBED_WORKER: 'True'
             ENABLE_USER_REGISTRATION: 'False'
         depends_on:
@@ -69,16 +70,29 @@ services:
     seaweedfs:
         image: chrislusf/seaweedfs:latest
         restart: unless-stopped
+        environment:
+            SEAWEEDFS_S3_ACCESS_KEY: ${SEAWEEDFS_S3_ACCESS_KEY}
+            SEAWEEDFS_S3_SECRET_KEY: ${SEAWEEDFS_S3_SECRET_KEY}
+        entrypoint: ['sh', '-c']
         command:
-            - server
-            - -dir=/data
-            - -s3
-            - -s3.port=8333
-            - -ip.bind=0.0.0.0
+            - |
+                mkdir -p /etc/seaweedfs
+                cat > /etc/seaweedfs/s3-config.json <<EOF
+                {
+                  "identities": [
+                    {
+                      "name": "app",
+                      "credentials": [{"accessKey": "$$SEAWEEDFS_S3_ACCESS_KEY", "secretKey": "$$SEAWEEDFS_S3_SECRET_KEY"}],
+                      "actions": ["Read", "Write"]
+                    }
+                  ]
+                }
+                EOF
+                exec weed server -dir=/data -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3-config.json -ip.bind=0.0.0.0
         volumes:
             - seaweedfs-data:/data
         healthcheck:
-            test: ['CMD', 'wget', '-qO-', 'http://seaweedfs:8333']
+            test: ['CMD-SHELL', 'nc -z localhost 8333 || exit 1']
             start_period: 15s
             interval: 10s
             timeout: 5s
@@ -121,6 +135,7 @@ services:
         command: serve
         volumes:
             - ntfy-cache:/var/cache/ntfy
+            - ntfy-lib:/var/lib/ntfy
             - ./ntfy/server.yml:/etc/ntfy/server.yml:ro
 
     openfga-migrate:
@@ -140,12 +155,32 @@ services:
         depends_on:
             openfga-migrate:
                 condition: service_completed_successfully
+    pgbackups:
+        image: prodrigestivill/postgres-backup-local
+        restart: unless-stopped
+        user: postgres:postgres
+        environment:
+            POSTGRES_HOST: postgres
+            POSTGRES_DB: ${GLITCHTIP_DB_NAME},${FLAGSMITH_DB_NAME},${OPENFGA_DB_NAME}
+            POSTGRES_USER: ${POSTGRES_SUPERUSER}
+            POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
+            SCHEDULE: '@daily'
+            BACKUP_KEEP_DAYS: 7
+            BACKUP_KEEP_WEEKS: 4
+            BACKUP_KEEP_MONTHS: 6
+        volumes:
+            - postgres-backups:/backups
+        depends_on:
+            postgres:
+                condition: service_healthy
 
 volumes:
     postgres-data:
+    postgres-backups:
     valkey-data:
     glitchtip-uploads:
     seaweedfs-data:
     uptime-kuma-data:
     goatcounter-data:
     ntfy-cache:
+    ntfy-lib:
