@@ -103,7 +103,7 @@ services:
                 condition: service_completed_successfully
 
     uptime-kuma:
-        image: louislam/uptime-kuma:1
+        image: louislam/uptime-kuma:2
         restart: unless-stopped
         volumes:
             - uptime-kuma-data:/app/data
